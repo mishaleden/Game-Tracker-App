@@ -1,5 +1,5 @@
 // Search screen: find games on IGDB and add them to a list.
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -27,20 +27,41 @@ export default function SearchScreen() {
   const [picking, setPicking] = useState<SearchResult | null>(null);
   const wide = useIsWide();
 
-  async function runSearch() {
-    const q = query.trim();
-    if (!q) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setResults(await searchGames(q, data.settings));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Search failed.');
-      setResults([]);
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Each search gets a number, so a slow old answer can't overwrite a newer one.
+  const latestSearch = useRef(0);
+
+  const runSearch = useCallback(
+    async (text: string) => {
+      const q = text.trim();
+      const searchNumber = ++latestSearch.current;
+      if (q.length < 2) {
+        setResults([]);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const found = await searchGames(q, data.settings);
+        if (searchNumber === latestSearch.current) setResults(found);
+      } catch (e) {
+        if (searchNumber === latestSearch.current) {
+          setError(e instanceof Error ? e.message : 'Search failed.');
+          setResults([]);
+        }
+      } finally {
+        if (searchNumber === latestSearch.current) setLoading(false);
+      }
+    },
+    [data.settings],
+  );
+
+  // Search as you type: wait until typing pauses for a moment, then search.
+  useEffect(() => {
+    const timer = setTimeout(() => runSearch(query), 400);
+    return () => clearTimeout(timer);
+  }, [query, runSearch]);
 
   const statusLabel = (r: SearchResult) => {
     const g = data.games[`igdb-${r.igdbId}`];
@@ -56,11 +77,11 @@ export default function SearchScreen() {
           placeholderTextColor={colors.textMuted}
           value={query}
           onChangeText={setQuery}
-          onSubmitEditing={runSearch}
+          onSubmitEditing={() => runSearch(query)}
           returnKeyType="search"
           autoCorrect={false}
         />
-        <Pressable style={styles.button} onPress={runSearch}>
+        <Pressable style={styles.button} onPress={() => runSearch(query)}>
           <Text style={styles.buttonText}>Search</Text>
         </Pressable>
       </View>
